@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP Nodes Dashboard</title>
+<style>
+  :root { --bg:#eef2f6; --card:#ffffff; --ink:#1c2733; --muted:#64748b; --line:#d8e0e8;
+          --temp:#d9531e; --hum:#2f7f9e; --warn:#b8561f; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#10161d; --card:#1a232d; --ink:#e6edf3; --muted:#93a1b0; --line:#2b3744;
+            --temp:#f08a5d; --hum:#5bb4d4; --warn:#e68a50; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font-family:"Trebuchet MS","Segoe UI",sans-serif; line-height:1.4; }
+  header { padding:28px 20px 8px; max-width:1000px; margin:0 auto; }
+  h1 { margin:0; font-size:1.6rem; }
+  #status { color:var(--muted); font-size:.9rem; margin-top:4px; }
+  main { max-width:1000px; margin:0 auto; padding:16px 20px 40px;
+         display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); }
+  .node { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; }
+  .node h2 { margin:0 0 2px; font-size:1.1rem; }
+  .badge { font-size:.8rem; color:var(--muted); }
+  .badge.off { color:var(--warn); font-weight:700; }
+  .row { display:flex; gap:28px; margin-top:16px; }
+  .val .n { font-size:2.3rem; font-weight:700; line-height:1; }
+  .val .u { font-size:1rem; color:var(--muted); margin-left:2px; }
+  .val .l { font-size:.85rem; color:var(--muted); margin-top:4px; }
+  .t .n { color:var(--temp); } .h .n { color:var(--hum); }
+  footer { max-width:1000px; margin:0 auto; padding:0 20px 30px; color:var(--muted); font-size:.8rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ESP nodes</h1>
+  <div id="status">Loading…</div>
+</header>
+<main id="grid"></main>
+<footer>Data from ThingSpeak, refreshed every 20 seconds. A node shows Offline if it has not reported for 5 minutes.</footer>
+
+<script>
+  // ===== CHANGE THIS: your ONE ThingSpeak Channel ID (channel must be public) =====
+  const CHANNEL_ID = "3520825";
+  const READ_KEY = "";   // leave empty for a public channel
+  // ================================================================================
+
+  // Node 1 = fields 1,2   Node 2 = fields 3,4   Node 3 = fields 5,6
+  const NODES = [
+    { name: "Node 1", tf: 1, hf: 2 },
+    { name: "Node 2", tf: 3, hf: 4 },
+    { name: "Node 3", tf: 5, hf: 6 }
+  ];
+  const REFRESH_MS = 20000, OFFLINE_MIN = 5;
+
+  const grid = document.getElementById("grid");
+  grid.innerHTML = NODES.map((n, i) => `
+    <section class="node">
+      <h2>${n.name}</h2>
+      <div class="badge" id="b${i}">Waiting for data</div>
+      <div class="row">
+        <div class="val t"><span class="n" id="t${i}">--</span><span class="u">°C</span><div class="l">Temperature</div></div>
+        <div class="val h"><span class="n" id="h${i}">--</span><span class="u">%</span><div class="l">Humidity</div></div>
+      </div>
+    </section>`).join("");
+
+  const fmt = v => (v === null || isNaN(v)) ? "--" : Number(v).toFixed(1);
+
+  async function getField(f) {
+    const key = READ_KEY ? "?api_key=" + READ_KEY : "";
+    const res = await fetch(`https://api.thingspeak.com/channels/${CHANNEL_ID}/fields/${f}/last.json${key}`);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const d = await res.json();
+    if (!d || !d.created_at) throw new Error("No data");
+    return { value: parseFloat(d["field" + f]), time: new Date(d.created_at) };
+  }
+
+  async function loadNode(n, i) {
+    const [t, h] = await Promise.all([getField(n.tf), getField(n.hf)]);
+    document.getElementById("t" + i).textContent = fmt(t.value);
+    document.getElementById("h" + i).textContent = fmt(h.value);
+
+    const ageMin = (Date.now() - t.time.getTime()) / 60000;
+    const offline = ageMin > OFFLINE_MIN;
+    const b = document.getElementById("b" + i);
+    b.textContent = offline ? "Offline, last seen " + Math.round(ageMin) + " min ago"
+                            : "Updated " + t.time.toLocaleTimeString();
+    b.className = "badge" + (offline ? " off" : "");
+  }
+
+  async function refresh() {
+    const results = await Promise.allSettled(NODES.map(loadNode));
+    results.forEach((r, i) => {
+      if (r.status === "rejected") {
+        const b = document.getElementById("b" + i);
+        b.textContent = "No data yet (" + r.reason.message + ")";
+        b.className = "badge off";
+      }
+    });
+    const ok = results.filter(r => r.status === "fulfilled").length;
+    document.getElementById("status").textContent =
+      ok + " of " + NODES.length + " nodes loaded. Last check " + new Date().toLocaleTimeString();
+  }
+
+  refresh();
+  setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>
